@@ -1,0 +1,5 @@
+# Runtime dependencies of the bot: NONE beyond the Python standard library.
+# `requests` is preinstalled on GitHub Actions ubuntu runners, so CI / the
+# scheduled workflow installs nothing (frugality rule from AGENTS.md).
+#
+# This file intentionally contains no pins — CI must never install packages.
