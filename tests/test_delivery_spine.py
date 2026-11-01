@@ -140,3 +140,42 @@ def test_probability_roll_loss_skips_fetch_and_send(tmp_path):
     assert telegram.sent == []
     assert source.fetch_called is False
 
+
+def test_pending_update_advances_stored_offset_across_runs(tmp_path):
+    # A pending update with update_id 1001 must be consumed exactly once:
+    # the state records offset 1002 and the next poll asks Telegram for it.
+    updates = [{"update_id": 1001, "message": {"text": "/lagi"}}]
+    result, harness, telegram, source = build_pipeline(
+        tmp_path, telegram=FakeTelegram(updates=updates), rng=FakeRng(roll=0.5))
+
+    assert result.reason == "probability-roll"  # placeholder: command handling is T7
+    raw_state = json.loads(harness.state_path.read_text(encoding="utf-8"))
+    assert raw_state["last_update_id"] == 1002
+
+    # A second run on the same state passes the stored offset to Telegram.
+    fake_next = FakeTelegram(updates=[])
+    build_pipeline(tmp_path, telegram=fake_next)
+    assert fake_next.offset_received == 1002
+
+
+def test_noop_run_writes_nothing_to_disk(tmp_path):
+    # No pending updates, cooldown far past, guaranteed probability loss:
+    # the fast-exit run must leave both data files byte-identical.
+    store = state_store.JsonStateStore(
+        state_path=tmp_path / "state.json",
+        history_path=tmp_path / "history.json",
+    )
+    store.save_state({
+        "last_sent_timestamp": "2026-11-01T03:00:00Z",  # > 90 min before FIXED_NOW
+        "last_update_id": None,
+    })
+    store.save_history([])
+    state_before = (tmp_path / "state.json").read_text(encoding="utf-8")
+    history_before = (tmp_path / "history.json").read_text(encoding="utf-8")
+
+    build_pipeline(tmp_path, rng=FakeRng(roll=0.5), clock=FakeClock())
+
+    assert (tmp_path / "state.json").read_text(encoding="utf-8") == state_before
+    assert (tmp_path / "history.json").read_text(encoding="utf-8") == history_before
+
+

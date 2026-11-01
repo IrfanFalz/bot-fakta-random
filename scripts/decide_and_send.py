@@ -133,6 +133,7 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
         return RunResult(False, "", "telegram-not-configured")
 
     current = state.load_state()
+    loaded = dict(current)
 
     # 1) Poll pending telegram updates: record the newest offset so replies
     #    are not seen twice (full command handling arrives in ticket T7).
@@ -147,17 +148,16 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
             ) + 1
 
     now = clock.now()
-    state_changed = False
 
     # 2) Cooldown, unless forced.
     if not force and _cooldown_active(
             current.get("last_sent_timestamp"), now, cooldown_minutes):
-        _persist_if_cool(state, current, state_changed)
+        _persist_if_cool(state, current, current != loaded)
         return RunResult(False, "", "cooldown")
 
     # 3) Probability roll, unless forced.
     if not force and rng.random() >= probability:
-        _persist_if_cool(state, current, state_changed)
+        _persist_if_cool(state, current, current != loaded)
         return RunResult(False, "", "probability-roll")
 
     # 4) Heavy work only happens when we are actually sending.
@@ -182,11 +182,13 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
         "timestamp": now_iso,
     })
     state.save_history(history)
-    _persist_if_cool(state, current, True)
+    state.save_state(current)
     return RunResult(True, message, "sent")
 
 
 def _persist_if_cool(state: Any, current: Dict[str, Any], changed: bool) -> None:
+    """Write state back only when something actually changed (no-op runs
+    must be byte-identical on disk so CI has nothing to commit)."""
     if changed:
         state.save_state(current)
 
