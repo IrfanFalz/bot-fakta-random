@@ -92,7 +92,6 @@ def build_pipeline(tmp_path, *, telegram=None, source=None, clock=None,
 
 def test_force_send_delivers_message_and_persists_state(tmp_path):
     result, harness, telegram, source = build_pipeline(tmp_path, force=True)
-
     # The composed message reaches the chat: fixed first opener + placeholder body.
     assert telegram.sent == ["Fakta random hari ini: Halo, aku bot fakta random. Tes delivery."]
     assert result.sent is True
@@ -109,3 +108,35 @@ def test_force_send_delivers_message_and_persists_state(tmp_path):
         "source": "placeholder",
         "timestamp": "2026-11-01T09:12:00Z",
     }]
+
+
+def test_cooldown_active_skips_heavy_work_and_sends_nothing(tmp_path):
+    # Last send was 31 minutes ago; cooldown is 90 minutes.
+    harness_prev = state_store.JsonStateStore(
+        state_path=tmp_path / "state.json",
+        history_path=tmp_path / "history.json",
+    )
+    harness_prev.save_state({
+        "last_sent_timestamp": "2026-11-01T08:41:00Z",  # 31 min before FIXED_NOW
+        "last_update_id": None,
+    })
+    clock = FakeClock(datetime(2026, 11, 1, 9, 12, 0, tzinfo=timezone.utc))
+
+    result, harness, telegram, source = build_pipeline(tmp_path, clock=clock)
+
+    assert result.sent is False
+    assert result.reason == "cooldown"
+    assert telegram.sent == []
+    assert source.fetch_called is False  # heavy work never starts
+
+
+def test_probability_roll_loss_skips_fetch_and_send(tmp_path):
+    # Definite loss: random() returns 0.5 against the default 0.06.
+    result, harness, telegram, source = build_pipeline(
+        tmp_path, rng=FakeRng(roll=0.5))
+
+    assert result.sent is False
+    assert result.reason == "probability-roll"
+    assert telegram.sent == []
+    assert source.fetch_called is False
+
