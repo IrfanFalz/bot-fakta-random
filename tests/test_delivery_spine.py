@@ -18,6 +18,7 @@ PLACEHOLDER_CONTENT = {
     "title": "Halo, aku bot fakta random",
     "body": "Halo, aku bot fakta random. Tes delivery.",
     "keywords": ["tes", "delivery"],
+    "source_name": "placeholder",
 }
 
 
