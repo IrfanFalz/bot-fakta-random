@@ -32,6 +32,7 @@ import os
 import random
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -152,12 +153,12 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
     # 2) Cooldown, unless forced.
     if not force and _cooldown_active(
             current.get("last_sent_timestamp"), now, cooldown_minutes):
-        _persist_if_cool(state, current, current != loaded)
+        _persist_state_if_changed(state, current, current != loaded)
         return RunResult(False, "", "cooldown")
 
     # 3) Probability roll, unless forced.
     if not force and rng.random() >= probability:
-        _persist_if_cool(state, current, current != loaded)
+        _persist_state_if_changed(state, current, current != loaded)
         return RunResult(False, "", "probability-roll")
 
     # 4) Heavy work only happens when we are actually sending.
@@ -189,11 +190,19 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
     return RunResult(True, message, "sent")
 
 
-def _persist_if_cool(state: Any, current: Dict[str, Any], changed: bool) -> None:
+def _persist_state_if_changed(state: Any, current: Dict[str, Any],
+                              changed: bool) -> None:
     """Write state back only when something actually changed (no-op runs
     must be byte-identical on disk so CI has nothing to commit)."""
     if changed:
         state.save_state(current)
+
+
+class SystemClock:
+    """Clock port backed by the system UTC clock."""
+
+    def now(self):
+        return datetime.now(timezone.utc)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -213,8 +222,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     result = run(
         telegram=TelegramClient(),
         source=PlaceholderSource(),
-        clock=type("SystemClock", (), {"now": staticmethod(
-            lambda: datetime_now_utc())})(),
+        clock=SystemClock(),
         rng=random,
         state=state_store.JsonStateStore(),
         probability=probability,
@@ -229,11 +237,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         print(f"skipped: {result.reason}")
     return 0  # green run is the default outcome; only fatal logic errors exit nonzero
-
-
-def datetime_now_utc() -> Any:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc)
 
 
 if __name__ == "__main__":

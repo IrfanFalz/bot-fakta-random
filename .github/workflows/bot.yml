@@ -1,0 +1,48 @@
+name: bot
+
+# T1 delivery spine: single combined workflow.
+# - schedule: every 15 minutes, normal probability/cooldown decision rules.
+# - repository_dispatch (send-fact): forced send, wired now for ticket T7
+#   (Telegram webhook -> Cloudflare Worker -> dispatch).
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  repository_dispatch:
+    types: [send-fact]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bot
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Decide and send
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Dispatch runs force the send (on-demand command pipeline, T7).
+          FORCE_SEND: ${{ github.event_name == 'repository_dispatch' && 'true' || 'false' }}
+        run: python scripts/decide_and_send.py
+
+      - name: Commit state back only when changed
+        run: |
+          if [ -n "$(git status --porcelain data)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data
+            git commit -m "T1: update delivery state/history [skip ci]"
+            git push
+          else
+            echo "no data changes; nothing to commit"
+          fi

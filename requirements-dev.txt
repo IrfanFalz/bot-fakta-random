@@ -1,0 +1,7 @@
+# Development-only tooling. NEVER install this in CI — GitHub runners already
+# ship `requests`, and the scheduled workflow runs the stdlib-only pipeline.
+#
+# Local verification (dev machine only):
+#   python -m pip install pytest        (one-off, local venv fine)
+#   python -m pytest tests/
+#   python scripts/decide_and_send.py --dry-run
