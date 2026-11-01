@@ -130,8 +130,9 @@ def format_message(content: Dict[str, Any], rng: Any) -> str:
 def pick_source(sources: List[tuple], rng: Any) -> Any:
     """Weighted pick from [(source_port, weight), ...].
 
-    Rolls once on the injected rng so tests stay deterministic; a single
-    candidate is returned without consuming rng (uniform over the weights).
+    Rolls once on the injected rng (uniform over relative weights, so tests
+    stay deterministic); a single candidate is therefore returned too, just
+    with a fruitless roll.
     """
     total = float(sum(weight for _, weight in sources))
     roll = rng.random() * total
