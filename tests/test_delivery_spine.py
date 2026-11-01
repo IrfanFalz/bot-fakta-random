@@ -144,11 +144,12 @@ def test_probability_roll_loss_skips_fetch_and_send(tmp_path):
 def test_pending_update_advances_stored_offset_across_runs(tmp_path):
     # A pending update with update_id 1001 must be consumed exactly once:
     # the state records offset 1002 and the next poll asks Telegram for it.
-    updates = [{"update_id": 1001, "message": {"text": "/lagi"}}]
+    # Non-command text is swallowed here (T7 continuous: /lagi is handled).
+    updates = [{"update_id": 1001, "message": {"text": "halo bro"}}]
     result, harness, telegram, source = build_pipeline(
         tmp_path, telegram=FakeTelegram(updates=updates), rng=FakeRng(roll=0.5))
 
-    assert result.reason == "probability-roll"  # placeholder: command handling is T7
+    assert result.reason == "probability-roll"  # non-command updates swap in
     raw_state = json.loads(harness.state_path.read_text(encoding="utf-8"))
     assert raw_state["last_update_id"] == 1002
 
