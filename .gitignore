@@ -1,0 +1,15 @@
+# Python caches / artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs / junk
+.venv/
+venv/
+env/
+
+# Scratch spaces from agent sessions
+.scratch/
