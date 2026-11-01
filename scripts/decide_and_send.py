@@ -171,7 +171,10 @@ def run(telegram: TelegramPort, source: SourcePort, clock: Any, rng: Any,
         print(f"telegram send failed: {exc}", file=sys.stderr)
         return RunResult(False, "", "telegram-send-failed")
 
-    # 5) Persist state + history (PRD shapes).
+    # 5) Persist state + history (PRD shapes) — but never in dry-run mode,
+    #    which must have zero writes so CI commits happen only for real sends.
+    if dry_run:
+        return RunResult(False, message, "dry-run")
     now_iso = datetime_to_iso(now)
     current["last_sent_timestamp"] = now_iso
     history = state.load_history()

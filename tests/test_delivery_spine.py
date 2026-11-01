@@ -179,3 +179,57 @@ def test_noop_run_writes_nothing_to_disk(tmp_path):
     assert (tmp_path / "history.json").read_text(encoding="utf-8") == history_before
 
 
+def test_dry_run_shows_message_with_zero_side_effects(tmp_path):
+    telegram = FakeTelegram(updates=[{"update_id": 5}])
+    store = state_store.JsonStateStore(
+        state_path=tmp_path / "state.json",
+        history_path=tmp_path / "history.json",
+    )
+    result = decide_and_send.run(
+        telegram=telegram, source=FakeSource(), clock=FakeClock(),
+        rng=FakeRng(), state=store, dry_run=True,
+    )
+
+    # The would-be message is produced and shown, nothing is sent or polled.
+    assert result.message == \
+        "Fakta random hari ini: Halo, aku bot fakta random. Tes delivery."
+    assert telegram.sent == []
+    assert telegram.offset_received is None  # polling skipped: zero network
+    # No state writes at all.
+    assert not (tmp_path / "state.json").exists()
+    assert not (tmp_path / "history.json").exists()
+
+
+def test_unconfigured_telegram_fails_gracefully_no_send(tmp_path, monkeypatch):
+    # No env token: the run finishes green with an explainable skip reason.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    from telegram_client import TelegramClient
+
+    store = state_store.JsonStateStore(
+        state_path=tmp_path / "state.json",
+        history_path=tmp_path / "history.json",
+    )
+    result = decide_and_send.run(
+        telegram=TelegramClient(), source=FakeSource(), clock=FakeClock(),
+        rng=FakeRng(), state=store,
+    )
+
+    assert result.sent is False
+    assert result.reason == "telegram-not-configured"
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_cli_dry_run_without_token_is_quiet_green(capsys, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    exit_code = decide_and_send.main(["--dry-run"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Halo, aku bot fakta random. Tes delivery." in output
+    assert "would be sent" in output
+
+
+
