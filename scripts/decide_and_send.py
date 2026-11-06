@@ -74,6 +74,9 @@ DEFAULT_COOLDOWN_MINUTES = 90
 # threshold can be tuned with the DEDUPE_THRESHOLD env var.
 DEFAULT_DEDUPE_THRESHOLD = dedupe.DEFAULT_THRESHOLD
 DEFAULT_DEDUPE_ATTEMPTS = 3
+# Telegram hard limits (research notes; ticket T6 enforces them here).
+TEXT_LIMIT = 4096     # sendMessage: 1-4096 chars AFTER entity parsing
+PHOTO_CAPTION_LIMIT = 1024  # sendPhoto captions: max 1024 chars
 
 # PRD 5.6: casual openers, chosen at random so messages don't read scheduled.
 OPENERS = (
@@ -169,6 +172,76 @@ def format_message(content: Dict[str, Any], rng: Any) -> str:
     return f"{opener} {body}"
 
 
+def _split_text(text: str, limit: int) -> List[str]:
+    """Word-boundary chunking that never exceeds `limit` (no mid-word cuts;
+    a single monster word over the limit gets hard-cut). Order preserved."""
+    text = text or ""
+    if len(text) <= limit:
+        return [text]
+    chunks: List[str] = []
+    current = ""
+    for word in text.split(" "):
+        candidate = current or word
+        if current:
+            candidate = f"{current} {word}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = word if len(word) <= limit else ""
+        if len(word) > limit:
+            while len(word) > limit:  # monster word: hard cut it apart
+                chunks.append(word[:limit])
+                word = word[limit:]
+            current = word
+    if current:
+        chunks.append(current)
+    return [chunk for chunk in chunks if chunk]
+
+
+def _deliver(telegram: Any, image_finder: Any, message: str,
+             content: Dict[str, Any], dry_run: bool = False) -> bool:
+    """Text-or-photo delivery with the Telegram hard limits (ticket T6).
+
+    - photo when the finder yields one: ≤1024 chars go out as the caption;
+      a longer story becomes photo-caption (first chunk) + the remainder as
+      its own text message, order preserved;
+    - plain text over 4096 chars → sequential ordered chunks under the
+      limit (a polished 400-word story can span this once escaping enters);
+    - image-finder failures/degraded kits simply degrade to text-only;
+    - every send failure surfaces as a False return (the run stays green).
+    """
+    if image_finder is not None and not dry_run:
+        photo = image_finder.find(content)
+        photo_sender = getattr(telegram, "send_photo", None)
+        if photo and photo_sender is not None:
+            caption, remainder = message, ""
+            if len(message) > PHOTO_CAPTION_LIMIT:
+                chunks = _split_text(message, PHOTO_CAPTION_LIMIT)
+                caption = chunks[0]
+                remainder = " ".join(chunks[1:])
+            if bool(photo_sender(photo["url"], caption=caption)):
+                if remainder:
+                    try:
+                        return bool(telegram.send_message(remainder))
+                    except Exception as exc:  # photo landed, tail failed
+                        print(f"photo tail message failed: {exc}",
+                              file=sys.stderr)
+                        return False
+                return True
+            print("sendPhoto failed; falling back to plain text",
+                  file=sys.stderr)
+        elif photo is None:
+            print("no image found for this topic", file=sys.stderr)
+
+    chunks = _split_text(message, TEXT_LIMIT)
+    for chunk in chunks:
+        if not telegram.send_message(chunk):
+            return False
+    return True
+
+
 def pick_source(sources: List[tuple], rng: Any) -> Any:
     """Weighted pick from [(source_port, weight), ...].
 
@@ -194,7 +267,8 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         sources: Optional[List[tuple]] = None,
         trigger: Optional[str] = None,
         dedupe_threshold: float = DEFAULT_DEDUPE_THRESHOLD,
-        polisher: Optional[Any] = None) -> RunResult:
+        polisher: Optional[Any] = None,
+        image_finder: Optional[Any] = None) -> RunResult:
     """One execution of the delivery decision pipeline.
 
     Exactly one content seam is expected: pass `sources` (weighted list, the
@@ -289,7 +363,8 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
                       file=sys.stderr)
         if not send_ok:
             try:
-                send_ok = telegram.send_message(message)
+                send_ok = _deliver(telegram, image_finder, message, content,
+                                   dry_run)
             except Exception as exc:  # keep the workflow green on API hiccups
                 print(f"telegram send failed: {exc}", file=sys.stderr)
                 return message, False
@@ -449,6 +524,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         groq = GroqClient()
         polisher = Polisher(groq)
 
+    from image import ImageFinder
+    image_finder = ImageFinder()  # disabled internally without a key
+
     desired_mix = [
         (WikipediaSource(), 35.0),
         (RedditSource(
@@ -481,6 +559,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         trigger=trigger,
         dedupe_threshold=dedupe_threshold,
         polisher=polisher,
+        image_finder=image_finder,
     )
     if result.sent:
         print("sent a message to the chat"
