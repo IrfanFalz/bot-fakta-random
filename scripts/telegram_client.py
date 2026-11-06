@@ -39,8 +39,15 @@ class TelegramClient:
     def is_configured(self) -> bool:
         return bool(self.token) and bool(self.chat_id)
 
-    def send_message(self, text: str) -> bool:
-        return self._call("sendMessage", {"chat_id": self.chat_id, "text": text})
+    def send_message(self, text: str, parse_mode: Optional[str] = None) -> bool:
+        payload: Dict[str, Any] = {"chat_id": self.chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return self._call("sendMessage", payload)
+
+    def send_markdown_v2(self, text: str) -> bool:
+        """MarkdownV2 send (spoiler-capable); caller pre-escapes."""
+        return self.send_message(text, parse_mode="MarkdownV2")
 
     def send_photo(self, photo_url: str, caption: Optional[str] = None) -> bool:
         payload: Dict[str, Any] = {"chat_id": self.chat_id, "photo": photo_url}
