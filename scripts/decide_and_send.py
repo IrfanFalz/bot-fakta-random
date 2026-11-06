@@ -64,6 +64,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 import state_store  # noqa: E402
 import dedupe  # noqa: E402
+import tg_format  # noqa: E402
 from state_store import datetime_to_iso, iso_to_datetime  # noqa: E402
 from wikipedia_source import SourceError  # noqa: E402
 
@@ -79,6 +80,9 @@ OPENERS = (
     "Fakta random hari ini:",
     "Tau gak...",
     "Hal kecil yang jarang disadari:",
+    "Nemu hal seru nih:",
+    "Baru kepikiran nih:",
+    "Fakta kecil yang keren:",
 )
 
 PLACEHOLDER_SOURCE = "placeholder"  # value of the offline --dry-run stand-in
@@ -189,7 +193,8 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         dry_run: bool = False, poll: bool = True,
         sources: Optional[List[tuple]] = None,
         trigger: Optional[str] = None,
-        dedupe_threshold: float = DEFAULT_DEDUPE_THRESHOLD) -> RunResult:
+        dedupe_threshold: float = DEFAULT_DEDUPE_THRESHOLD,
+        polisher: Optional[Any] = None) -> RunResult:
     """One execution of the delivery decision pipeline.
 
     Exactly one content seam is expected: pass `sources` (weighted list, the
@@ -260,12 +265,34 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
                   "re-picking a different source", file=sys.stderr)
         if content is None:  # pragma: no cover - loop always assigns or raises
             raise SourceError("no usable content after all dedupe attempts")
+
+        # Voice pass (ticket T5): when a polisher is wired, the raw body is
+        # rewritten casual-Indonesian motion — any Groq failure inside the
+        # polisher degrades to the raw body, the send still survives.
+        if polisher is not None:
+            content = {**content,
+                       "body": polisher.polish(content)}
         message = format_message(content, rng)
-        try:
-            send_ok = telegram.send_message(message)
-        except Exception as exc:  # keep the workflow green on API hiccups
-            print(f"telegram send failed: {exc}", file=sys.stderr)
-            return message, False
+
+        # Spoilers (ticket T5): ~10% of sends wrap the payload in a tap-to-
+        # reveal MarkdownV2 spoiler — but ONLY ports that can actually
+        # render MarkdownV2 roll for it, so test fakes keep their exact
+        # single-consumption rng contract.
+        send_ok = False
+        markdown_sender = getattr(telegram, "send_markdown_v2", None)
+        if markdown_sender is not None and not dry_run and \
+                rng.random() < tg_format.SPOILER_CHANCE:
+            try:
+                send_ok = bool(markdown_sender(tg_format.spoiler(message)))
+            except Exception as exc:  # spoiled formatting failed → plain
+                print(f"spoiler send failed, falling back to plain: {exc}",
+                      file=sys.stderr)
+        if not send_ok:
+            try:
+                send_ok = telegram.send_message(message)
+            except Exception as exc:  # keep the workflow green on API hiccups
+                print(f"telegram send failed: {exc}", file=sys.stderr)
+                return message, False
         if not send_ok:
             return message, False
 
@@ -400,6 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "DEDUPE_THRESHOLD", DEFAULT_DEDUPE_THRESHOLD))
 
     from telegram_client import TelegramClient
+    import ai_generated_source  # noqa: E402  (T5 slot, used above when keyed)
     from wikipedia_source import WikipediaSource
     from reddit_source import RedditSource
     from trivia_source import TriviaSource
@@ -409,6 +437,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Ticket T4 desired mix (weights by spec section 5.2); slot entries that
     # are None (unconfigured/absent) get their weight redistributed by the
     # pool builder — the bot never mentions its plumbing.
+    groq = None
+    polisher = None
+    if os.environ.get("GROQ_API_KEY"):
+        # Ticket T5: one shared Groq client powers BOTH the voice pass and
+        # the AI-generated weird-question slot. Failures inside either
+        # degrade gracefully (raw text / slot dropped), never raise out.
+        from groq_client import GroqClient
+        from polish import Polisher
+        from ai_generated_source import AIGeneratedSource
+        groq = GroqClient()
+        polisher = Polisher(groq)
+
     desired_mix = [
         (WikipediaSource(), 35.0),
         (RedditSource(
@@ -418,10 +458,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "github.com/IrfanFalz/bot-fakta-random)")), 25.0),
         (TriviaSource(), 20.0),
         (NumbersSource(), 10.0),
-        # AI-generated weird-question slot: wired in ticket T5 when a Groq
-        # key exists; for now the slot is (None, weight) → its weight gets
-        # redistributed by the pool builder.
-        (None, 10.0),
+        # AI-generated weird-question slot (ticket T5): present only with a
+        # Groq key; its weight is redistributed when absent (source_pool).
+        (ai_generated_source.AIGeneratedSource(groq), 10.0) if groq else (None, 10.0),
     ]
     candidate_sources = build_pool(desired_mix)
     if args.dry_run:
@@ -441,6 +480,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         dry_run=args.dry_run,
         trigger=trigger,
         dedupe_threshold=dedupe_threshold,
+        polisher=polisher,
     )
     if result.sent:
         print("sent a message to the chat"
