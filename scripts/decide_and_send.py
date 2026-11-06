@@ -341,7 +341,7 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
             raise SourceError("no usable content after all dedupe attempts")
 
         # Voice pass (ticket T5): when a polisher is wired, the raw body is
-        # rewritten casual-Indonesian motion — any Groq failure inside the
+        # rewritten in casual Indonesian — any Groq failure inside the
         # polisher degrades to the raw body, the send still survives.
         if polisher is not None:
             content = {**content,
