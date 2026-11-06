@@ -33,6 +33,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Dispatch runs force the send (on-demand command pipeline, T7).
           FORCE_SEND: ${{ github.event_name == 'repository_dispatch' && 'true' || 'false' }}
+          # T7: the /lagi webhook worker dispatches {trigger: "lagi"}; such a
+          # run takes the on-demand path (same pipeline, cooldown/probability
+          # bypassed, no getUpdates — with a webhook set polling would error).
+          TRIGGER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger || '' }}
         run: python scripts/decide_and_send.py
 
       - name: Commit state back only when changed

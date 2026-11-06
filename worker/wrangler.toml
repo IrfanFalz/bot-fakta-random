@@ -1,0 +1,7 @@
+name = "bot-fakta-lagi"
+main = "src/worker.js"
+compatibility_date = "2026-01-01"
+
+# Deploy path is the Cloudflare dashboard paste (docs/SETUP_lagi.md) — this
+# file only pins the entry point for a later `npx wrangler deploy` option.
+# NEVER put secrets here: they are dashboard "Variables & Secrets" only.
