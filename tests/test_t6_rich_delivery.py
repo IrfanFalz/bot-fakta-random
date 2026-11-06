@@ -165,7 +165,7 @@ def test_long_caption_becomes_photo_plus_remainder(tmp_path):
     remainder = telegram.sent[0]
     assert len(photo_caption) <= 1024, "caption must respect the hard limit"
     assert telegram.sent, "the remainder goes out as its own message"
-    # story cot preserve: caption + remainder covers the whole story
+    # story continuity preserved: caption + remainder covers the whole thing
     assert (photo_caption + " " + remainder).replace("  ", " ") \
         .replace(" kata kata", " kata kata") in (
         photo_caption + " " + remainder)
