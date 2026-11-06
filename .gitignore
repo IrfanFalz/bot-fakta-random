@@ -13,3 +13,5 @@ env/
 
 # Scratch spaces from agent sessions
 .scratch/
+*_err.txt
+pea.txt

@@ -401,15 +401,33 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     from telegram_client import TelegramClient
     from wikipedia_source import WikipediaSource
+    from reddit_source import RedditSource
+    from trivia_source import TriviaSource
+    from numbers_source import NumbersSource
+    from source_pool import build_pool
 
+    # Ticket T4 desired mix (weights by spec section 5.2); slot entries that
+    # are None (unconfigured/absent) get their weight redistributed by the
+    # pool builder — the bot never mentions its plumbing.
+    desired_mix = [
+        (WikipediaSource(), 35.0),
+        (RedditSource(
+            user_agent=os.environ.get(
+                "REDDIT_USER_AGENT",
+                "bot-fakta-random/1.0 (personal Telegram bot, "
+                "github.com/IrfanFalz/bot-fakta-random)")), 25.0),
+        (TriviaSource(), 20.0),
+        (NumbersSource(), 10.0),
+        # AI-generated weird-question slot: wired in ticket T5 when a Groq
+        # key exists; for now the slot is (None, weight) → its weight gets
+        # redistributed by the pool builder.
+        (None, 10.0),
+    ]
+    candidate_sources = build_pool(desired_mix)
     if args.dry_run:
         # Dry-run is a zero-network preview: offline stand-in content instead
-        # of the live Wikipedia fetch.
+        # of any live source fetch.
         candidate_sources = [(PlaceholderSource(), 100.0)]
-    else:
-        # Ticket T2: single weighted source (Wikipedia, 100%). Later tickets
-        # add further candidates and spread the weights.
-        candidate_sources = [(WikipediaSource(), 100.0)]
 
     result = run(
         telegram=TelegramClient(),
