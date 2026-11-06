@@ -52,6 +52,7 @@ import argparse
 import os
 import random
 import sys
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,10 +63,16 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import state_store  # noqa: E402
+import dedupe  # noqa: E402
 from state_store import datetime_to_iso, iso_to_datetime  # noqa: E402
+from wikipedia_source import SourceError  # noqa: E402
 
 DEFAULT_PROBABILITY = 0.06
 DEFAULT_COOLDOWN_MINUTES = 90
+# Ticket T3: don't resend a topic that resembles every recent one. The
+# threshold can be tuned with the DEDUPE_THRESHOLD env var.
+DEFAULT_DEDUPE_THRESHOLD = dedupe.DEFAULT_THRESHOLD
+DEFAULT_DEDUPE_ATTEMPTS = 3
 
 # PRD 5.6: casual openers, chosen at random so messages don't read scheduled.
 OPENERS = (
@@ -181,7 +188,8 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES, force: bool = False,
         dry_run: bool = False, poll: bool = True,
         sources: Optional[List[tuple]] = None,
-        trigger: Optional[str] = None) -> RunResult:
+        trigger: Optional[str] = None,
+        dedupe_threshold: float = DEFAULT_DEDUPE_THRESHOLD) -> RunResult:
     """One execution of the delivery decision pipeline.
 
     Exactly one content seam is expected: pass `sources` (weighted list, the
@@ -228,14 +236,30 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         (message, sent).
         """
         # Heavy work only when we are actually sending: pick from the
-        # weighted candidate list and fetch (T2 seam semantics preserved).
+        # weighted candidate list, fetch, and retry against the repetition
+        # gate (ticket T3) — a near-duplicate candidate is thrown back and a
+        # different source is picked, up to `DEFAULT_DEDUPE_ATTEMPTS` tries;
+        # after that the best candidate in hand is sent anyway rather than
+        # the send silently disappearing.
         candidates = sources if sources is not None else [(source, 100.0)]
-        chosen = pick_source(candidates, rng)
-        content = chosen.fetch()
-        if not isinstance(content, dict) or not (content.get("body") or "").strip():
-            raise SourceError(
-                "content source returned an unusable/malformed result"
-            )
+        history_snapshot = [] if dry_run else state.load_history()
+        content: Optional[Dict[str, Any]] = None
+        for attempt in range(1, DEFAULT_DEDUPE_ATTEMPTS + 1):
+            chosen = pick_source(candidates, rng)
+            candidate = chosen.fetch()
+            if not isinstance(candidate, dict) or not (candidate.get("body") or "").strip():
+                raise SourceError(
+                    "content source returned an unusable/malformed result"
+                )
+            if (attempt >= DEFAULT_DEDUPE_ATTEMPTS
+                    or not dedupe.is_duplicate(candidate, history_snapshot,
+                                               dedupe_threshold)):
+                content = candidate
+                break
+            print(f"candidate looks like a recent topic (attempt {attempt}), "
+                  "re-picking a different source", file=sys.stderr)
+        if content is None:  # pragma: no cover - loop always assigns or raises
+            raise SourceError("no usable content after all dedupe attempts")
         message = format_message(content, rng)
         try:
             send_ok = telegram.send_message(message)
@@ -329,6 +353,7 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         message, sent = _run_send_pipeline(now)
     except Exception as exc:  # typed SourceError, network hiccups, odd shapes
         print(f"content source failed (skip this run): {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         _persist_state_if_changed(state, current, current != loaded)
         return RunResult(False, "", "source-fetch-failed")
     if dry_run:
@@ -371,6 +396,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "TRIGGER", "") == ON_DEMAND_TRIGGER else None
     probability = float(os.environ.get("PROBABILITY", DEFAULT_PROBABILITY))
     cooldown_minutes = int(os.environ.get("COOLDOWN_MINUTES", DEFAULT_COOLDOWN_MINUTES))
+    dedupe_threshold = float(os.environ.get(
+        "DEDUPE_THRESHOLD", DEFAULT_DEDUPE_THRESHOLD))
 
     from telegram_client import TelegramClient
     from wikipedia_source import WikipediaSource
@@ -395,6 +422,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         force=force,
         dry_run=args.dry_run,
         trigger=trigger,
+        dedupe_threshold=dedupe_threshold,
     )
     if result.sent:
         print("sent a message to the chat"
