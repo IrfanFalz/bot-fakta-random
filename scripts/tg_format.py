@@ -1,61 +1,72 @@
-"""Telegram MarkdownV2 formatting helpers (ticket T5 voice + spoilers).
+"""Telegram HTML formatting helpers (voice + bold + spoilers).
 
-Per research notes: spoiler = `||spoiler text||`; legacy Markdown lacks
-it, so we always use `parse_mode=MarkdownV2`. The parser is picky: every
-one of these 18 characters must be escaped when it is not deliberate
-markup:
+One parse mode for the whole bot: `parse_mode=HTML` — the well-tolerated
+side of the Telegram parser (only &, <, > need escaping; MarkdownV2's
+18-char escape dance is gone). Utilities:
 
-    _ * [ ] ( ) ~ ` > # + - = | { } . !
-
-`escape_markdown_v2` is the blunt-but-safe escape pass for free text;
-`markdown_v2 spoiler(text)` wraps the WHOLE payload in a spoiler block —
-the tap-to-reveal bounce the PRD asks for on ~10% of sends.
+- `escape_html(text)`   : blunt escape pass for free text;
+- `plain_to_html(text)` : escape + `**bold**` markers -> `<b>bold</b>`
+                          (the marker convention the Groq polisher outputs);
+- `plain_text(text)`    : markers stripped — for photo captions and the
+                          plain-port fallback;
+- `split_for_html(text)`: word-boundary chunks (order preserved) safe for
+   the sendMessage 4096-after-parsing limit;
+- `spoiler_html(text)`  : tap-to-reveal wrapper for the ~10% spoiler sends.
 """
 from __future__ import annotations
 
 import re
-from typing import List
 
 SPOILER_CHANCE = 0.10  # PRD section 5.6: sesekali pakai spoiler
-_MARKDOWNV2_CHARS = re.compile(r"([_*\[\]()~`>#+\-=|{}.!])")
+
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.S)
 
 
-def escape_markdown_v2(text: str) -> str:
-    """Escape every MarkdownV2 special character (blunt, always-correct)."""
-    return _MARKDOWNV2_CHARS.sub(r"\\\1", text or "")
+def escape_html(text: str) -> str:
+    """Escape the three HTML-sensitive characters (order matters: & first)."""
+    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def spoiler(text: str) -> str:
-    """Escape `text` fully, then wrap it in a MarkdownV2 spoiler block."""
-    return f"||{escape_markdown_v2(text)}||"
+def plain_text(text: str) -> str:
+    """Bold markers stripped: the body as literally-visible characters."""
+    return _BOLD_RE.sub(r"\1", text or "")
 
 
-def split_escaped(text: str, limit: int) -> "list[str]":
-    """Word-boundary chunks whose ESCAPED length stays under `limit`.
+def plain_to_html(text: str) -> str:
+    """Escape everything, then turn `**term**` into real `<b>` entities.
 
-    MarkdownV2 escaping can nearly double a string (`1+1=2` -> `1\\+1\\=2`),
-    so chunks are measured AFTER escaping (code-review fix: a polished
-    ~400-word story once escaped can blow past the 4096 sendMessage cap).
-    Splits always land on spaces (an escape sequence never contains one), so
-    a chunk can never begin or end mid-escape. A single monster word still
-    over the limit is hard-cut on its escaping-aware size.
+    Escape FIRST (asterisks survive escaping untouched), then convert the
+    remaining markers — so user content that contains a literal `**` pair
+    also renders as bold rather than leaking raw asterisks.
+    """
+    return _BOLD_RE.sub(r"<b>\1</b>", escape_html(text or ""))
+
+
+def split_for_html(text: str, limit: int) -> "list[str]":
+    """Word-boundary chunks whose RENDERED length stays under `limit`.
+
+    The Telegram limit counts characters after entity parsing — that is the
+    visible text (tags/escapes collapse). We conservatively measure the
+    escaped+tagged form (`plain_to_html`), which is always >= the visible
+    count, so chunks can never tip over. Splits land on spaces; a monster
+    word still over the limit is hard-cut.
     """
     text = text or ""
-    if len(escape_markdown_v2(text)) <= limit:
+    if len(plain_to_html(text)) <= limit:
         return [text]
     chunks: "list[str]" = []
     current = ""
     for word in text.split(" "):
         candidate = word if not current else f"{current} {word}"
-        if len(escape_markdown_v2(candidate)) <= limit:
+        if len(plain_to_html(candidate)) <= limit:
             current = candidate
             continue
         if current:
             chunks.append(current)
-        # monster word: shrink on escaped size, hard-cut pieces apart
-        while len(escape_markdown_v2(word)) > limit:
+        # monster word: shrink on rendered size, hard-cut pieces apart
+        while len(plain_to_html(word)) > limit:
             cut = len(word)
-            while cut > 1 and len(escape_markdown_v2(word[:cut])) > limit:
+            while cut > 1 and len(plain_to_html(word[:cut])) > limit:
                 cut -= 1
             chunks.append(word[:cut])
             word = word[cut:]
@@ -63,3 +74,8 @@ def split_escaped(text: str, limit: int) -> "list[str]":
     if current:
         chunks.append(current)
     return [chunk for chunk in chunks if chunk]
+
+
+def spoiler_html(text: str) -> str:
+    """Wrap an ALREADY-html-safe chunk in a tap-to-reveal spoiler block."""
+    return f"<tg-spoiler>{text}</tg-spoiler>"
