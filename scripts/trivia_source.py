@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import html
 import random as _random
-import string
 from typing import Any, Dict
 
 import requests
 
+import keywords
 from wikipedia_source import SourceError  # same typed contract
 
 API_URL = "https://opentdb.com/api.php"
@@ -29,15 +29,6 @@ API_URL = "https://opentdb.com/api.php"
 PREFERRED_CATEGORIES = (9, 18, 27, 22, 25, 19)
 
 _TIMEOUT = 8
-
-
-def _keywords_of(text: str, limit: int) -> list:
-    words = [
-        word.strip(string.punctuation).casefold()
-        for word in (text or "").split()
-    ]
-    kept = [w for w in words if len(w) >= 3]
-    return kept[:limit]
 
 
 def _one_result(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -81,11 +72,12 @@ class TriviaSource:
         title = question
         body = (f"Pertanyaan random ({trivia_category}): {question} "
                 f"Jawabannya ternyata: {answer}.")
-        keywords = _keywords_of(f"{trivia_category} {question}", 5)
+        card_keywords = keywords.keywords_of(f"{trivia_category} {question}")
         return {
             "title": title,
             "body": body,
-            "keywords": keywords,
+            "keywords": card_keywords,
             "source_name": "trivia",
-            "image_query": " ".join(keywords[:3]) or trivia_category,
+            "image_query": keywords.image_query(
+                f"{trivia_category} {question}", 3) or trivia_category,
         }

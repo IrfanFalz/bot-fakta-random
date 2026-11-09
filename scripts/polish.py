@@ -13,7 +13,7 @@ key means polish is simply off.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 _SYSTEM_PROMPT = (
     "Kamu editor konten santai untuk bot Telegram personal di Indonesia. "
@@ -66,7 +66,3 @@ class Polisher:
 def strip_markdown_heading(text: str) -> str:
     """Safety net for stray AI markdown headings (PRD 10.6)."""
     return re.sub(r"^#{1,6}\s.*$", "", text or "", flags=re.M).strip()
-
-
-def is_polish_available(polisher: Optional[Any]) -> bool:
-    return polisher is not None

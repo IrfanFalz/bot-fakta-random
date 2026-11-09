@@ -81,11 +81,10 @@ class GroqClient:
                 raise GroqError(
                     f"groq returned HTTP {response.status_code}: "
                     f"{response.text[:200]}")
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise GroqError(f"groq returned non-JSON body: {exc}") from exc
         except requests.RequestException as exc:
             raise GroqError(f"groq request failed: {exc}") from exc
-        try:
-            jsonpayload = response.json()
-        except ValueError as exc:
-            raise GroqError(f"groq returned non-JSON body: {exc}") from exc
-        return _extract_content(jsonpayload)
+        return _extract_content(payload)

@@ -73,7 +73,7 @@ Dry-run uses an offline placeholder source by design: it never touches the netwo
 
 | Knob | Default | Effect |
 |---|---|---|
-| `PROBABILITY` | `0.06` | send chance per 15-min check (≈1–2 msg/day) |
+| `PROBABILITY` | `0.02` | send chance per 15-min check (≈1–2 msg/day) |
 | `COOLDOWN_MINUTES` | `90` | minimum gap between scheduled messages |
 | `DEDUPE_THRESHOLD` | `0.6` | similarity gate for "near-duplicate" topics |
 | `SPOILER_CHANCE` (constant in `tg_format.py`) | `0.10` | how often messages are tap-to-reveal |
@@ -91,4 +91,4 @@ Every component sits inside a free tier with no card on file: GitHub Actions on 
 
 ## Fix the slash command if it ever lags
 
-`/lagi` responds within seconds after the worker is deployed; if the worker is down (or `deleteWebhook` was run), scheduled runs pick `/lagi` up within 15 minutes — same message, no bespoke code path.
+`/lagi` responds within seconds after the worker is deployed; if the worker is down (or `deleteWebhook` was run), scheduled runs pick `/lagi` up within 15 minutes — same message, no bespoke code path. **Note:** these two paths are mutually exclusive by Telegram design — while the webhook is set, `getUpdates` from Actions is rejected with 409, so the poll fallback only works after `deleteWebhook` (see `docs/SETUP_lagi.md`).

@@ -68,7 +68,7 @@ import tg_format  # noqa: E402
 from state_store import datetime_to_iso, iso_to_datetime  # noqa: E402
 from wikipedia_source import SourceError  # noqa: E402
 
-DEFAULT_PROBABILITY = 0.06
+DEFAULT_PROBABILITY = 0.02  # ~1-2 sends/day over 96 scheduled checks (code-review recalibration)
 DEFAULT_COOLDOWN_MINUTES = 90
 # Ticket T3: don't resend a topic that resembles every recent one. The
 # threshold can be tuned with the DEDUPE_THRESHOLD env var.
@@ -223,8 +223,15 @@ def _deliver(telegram: Any, image_finder: Any, message: str,
                 remainder = " ".join(chunks[1:])
             if bool(photo_sender(photo["url"], caption=caption)):
                 if remainder:
+                    # code-review fix: the remainder has its own hard limit —
+                    # chunk it (in order) like any other oversized text
                     try:
-                        return bool(telegram.send_message(remainder))
+                        for part in _split_text(remainder, TEXT_LIMIT):
+                            if not telegram.send_message(part):
+                                print("photo tail message failed",
+                                      file=sys.stderr)
+                                return False
+                        return True
                     except Exception as exc:  # photo landed, tail failed
                         print(f"photo tail message failed: {exc}",
                               file=sys.stderr)
@@ -315,21 +322,36 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         (message, sent).
         """
         # Heavy work only when we are actually sending: pick from the
-        # weighted candidate list, fetch, and retry against the repetition
-        # gate (ticket T3) — a near-duplicate candidate is thrown back and a
-        # different source is picked, up to `DEFAULT_DEDUPE_ATTEMPTS` tries;
-        # after that the best candidate in hand is sent anyway rather than
-        # the send silently disappearing.
+        # weighted candidate list and retry against BOTH failure kinds —
+        # a fetch that raises (typed SourceError, network hiccup, dead API)
+        # and a near-duplicate candidate (ticket T3 gate) each throw the
+        # pick back for a different source, up to DEFAULT_DEDUPE_ATTEMPTS
+        # tries; after that the best evidence in hand decides: a duplicate
+        # is sent anyway, while a still-failing pipeline lets the caller
+        # map it to a green skip (`source-fetch-failed` /
+        # `on-demand-pipeline-failed`). One flaky source can no longer
+        # silence a whole run when other sources are healthy.
         candidates = sources if sources is not None else [(source, 100.0)]
         history_snapshot = [] if dry_run else state.load_history()
         content: Optional[Dict[str, Any]] = None
+        last_error: Optional[Exception] = None
         for attempt in range(1, DEFAULT_DEDUPE_ATTEMPTS + 1):
             chosen = pick_source(candidates, rng)
-            candidate = chosen.fetch()
+            try:
+                candidate = chosen.fetch()
+            except Exception as exc:
+                last_error = exc
+                if attempt >= DEFAULT_DEDUPE_ATTEMPTS:
+                    raise
+                print(f"source fetch failed (attempt {attempt}), "
+                      "trying another source: " + str(exc), file=sys.stderr)
+                continue
             if not isinstance(candidate, dict) or not (candidate.get("body") or "").strip():
-                raise SourceError(
-                    "content source returned an unusable/malformed result"
-                )
+                last_error = SourceError(
+                    "content source returned an unusable/malformed result")
+                print(str(last_error) + f" (attempt {attempt}), "
+                      "trying another source", file=sys.stderr)
+                continue
             if (attempt >= DEFAULT_DEDUPE_ATTEMPTS
                     or not dedupe.is_duplicate(candidate, history_snapshot,
                                                dedupe_threshold)):
@@ -337,8 +359,9 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
                 break
             print(f"candidate looks like a recent topic (attempt {attempt}), "
                   "re-picking a different source", file=sys.stderr)
-        if content is None:  # pragma: no cover - loop always assigns or raises
-            raise SourceError("no usable content after all dedupe attempts")
+        if content is None:
+            raise (last_error if last_error is not None
+                   else SourceError("no usable content after all attempts"))
 
         # Voice pass (ticket T5): when a polisher is wired, the raw body is
         # rewritten in casual Indonesian — any Groq failure inside the
@@ -351,16 +374,33 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         # Spoilers (ticket T5): ~10% of sends wrap the payload in a tap-to-
         # reveal MarkdownV2 spoiler — but ONLY ports that can actually
         # render MarkdownV2 roll for it, so test fakes keep their exact
-        # single-consumption rng contract.
+        # single-consumption rng contract. Escaping inflates the payload
+        # (code-review fix: chunk with tg_format.split_escaped so every
+        # spoiler chunk stays under the 4096 sendMessage cap, in order).
         send_ok = False
         markdown_sender = getattr(telegram, "send_markdown_v2", None)
         if markdown_sender is not None and not dry_run and \
                 rng.random() < tg_format.SPOILER_CHANCE:
+            sent_parts = 0
+            chunks: List[str] = []
             try:
-                send_ok = bool(markdown_sender(tg_format.spoiler(message)))
-            except Exception as exc:  # spoiled formatting failed → plain
-                print(f"spoiler send failed, falling back to plain: {exc}",
-                      file=sys.stderr)
+                chunks = tg_format.split_escaped(message, TEXT_LIMIT)
+                for chunk in chunks:
+                    if bool(markdown_sender(tg_format.spoiler(chunk))):
+                        sent_parts += 1
+                    else:
+                        break
+            except Exception as exc:
+                print(f"spoiler send failed: {exc}", file=sys.stderr)
+            if chunks and sent_parts == len(chunks):
+                send_ok = True
+            elif sent_parts > 0:
+                # partial delivery: re-sending plain text would duplicate
+                # the already-delivered chunks on the user's screen
+                print(f"spoiler partially delivered ({sent_parts}/{len(chunks)}); "
+                      "not falling back to plain", file=sys.stderr)
+                return message, False
+            # sent_parts == 0: nothing went out, plain deliver below handles it
         if not send_ok:
             try:
                 send_ok = _deliver(telegram, image_finder, message, content,

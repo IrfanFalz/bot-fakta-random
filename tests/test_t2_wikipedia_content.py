@@ -123,7 +123,7 @@ def test_wikipedia_summary_flows_to_send_as_uniform_content(tmp_path, monkeypatc
     result, store, _ = build(
         tmp_path, source=WikipediaSource(),
         telegram=telegram,
-        rng=FakeRng(roll=0.0),  # probability roll passes (roll < 0.06)
+        rng=FakeRng(roll=0.0),  # probability roll passes (roll < 0.02)
     )
 
     assert result.sent is True
@@ -169,7 +169,7 @@ def test_single_weighted_entry_is_always_picked(tmp_path):
                     "source_name": "fake"}
 
     result, store, _ = build(
-        tmp_path, source=OnlySource(), rng=FakeRng(roll=0.3),  # > 0.06; forced
+        tmp_path, source=OnlySource(), rng=FakeRng(roll=0.3),  # > 0.02; forced
         force=True, sources=[(OnlySource(), 100.0)],
     )
     assert result.sent is True
