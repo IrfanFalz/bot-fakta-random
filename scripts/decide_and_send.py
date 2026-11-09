@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import re
 import sys
 import traceback
 from dataclasses import dataclass
@@ -145,6 +146,13 @@ class PrintingTelegramPort:
         print("-------------------------------")
         return True
 
+    def send_html(self, text: str) -> bool:
+        """Pretty HTML preview: unescape entities, show bold visually."""
+        import html as _html
+        mirror = _html.unescape(text or "")
+        mirror = re.sub(r"</?b>", "*", mirror)
+        return self.send_message(mirror)
+
     def get_updates(self, offset: Optional[int]) -> List[Dict[str, Any]]:
         return []
 
@@ -205,29 +213,41 @@ def _deliver(telegram: Any, image_finder: Any, message: str,
     """Text-or-photo delivery with the Telegram hard limits (ticket T6).
 
     - photo when the finder yields one: ≤1024 chars go out as the caption;
-      a longer story becomes photo-caption (first chunk) + the remainder as
-      its own text message, order preserved;
-    - plain text over 4096 chars → sequential ordered chunks under the
-      limit (a polished 400-word story can span this once escaping enters);
-    - image-finder failures/degraded kits simply degrade to text-only;
+      a longer story becomes photo (first chunk) + the remainder as separate
+      text messages, order preserved;
+    - plain text over 4096 chars → sequential ordered chunks under the limit;
+    - HTML-capable ports receive the polished rendering (`plain_to_html`:
+      bold paragraphs), plain-only fakes the raw text — unchanged history;
     - every send failure surfaces as a False return (the run stays green).
     """
+    html_sender = getattr(telegram, "send_html", None)
+
+    def _send_text(chunk: str) -> bool:
+        if html_sender is not None:
+            try:
+                return bool(html_sender(tg_format.plain_to_html(chunk)))
+            except Exception:
+                # render/HTML glitch: degrade to raw text, never silent
+                return bool(telegram.send_message(chunk))
+        return bool(telegram.send_message(chunk))
+
     if image_finder is not None and not dry_run:
         photo = image_finder.find(content)
         photo_sender = getattr(telegram, "send_photo", None)
         if photo and photo_sender is not None:
             caption, remainder = message, ""
             if len(message) > PHOTO_CAPTION_LIMIT:
-                chunks = _split_text(message, PHOTO_CAPTION_LIMIT)
-                caption = chunks[0]
-                remainder = " ".join(chunks[1:])
-            if bool(photo_sender(photo["url"], caption=caption)):
+                parts = _split_text(message, PHOTO_CAPTION_LIMIT)
+                caption = parts[0]
+                remainder = " ".join(parts[1:])
+            if bool(photo_sender(photo["url"],
+                                 caption=tg_format.plain_text(caption))):
                 if remainder:
                     # code-review fix: the remainder has its own hard limit —
                     # chunk it (in order) like any other oversized text
                     try:
                         for part in _split_text(remainder, TEXT_LIMIT):
-                            if not telegram.send_message(part):
+                            if not _send_text(part):
                                 print("photo tail message failed",
                                       file=sys.stderr)
                                 return False
@@ -242,9 +262,8 @@ def _deliver(telegram: Any, image_finder: Any, message: str,
         elif photo is None:
             print("no image found for this topic", file=sys.stderr)
 
-    chunks = _split_text(message, TEXT_LIMIT)
-    for chunk in chunks:
-        if not telegram.send_message(chunk):
+    for chunk in _split_text(message, TEXT_LIMIT):
+        if not _send_text(chunk):
             return False
     return True
 
@@ -372,21 +391,20 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         message = format_message(content, rng)
 
         # Spoilers (ticket T5): ~10% of sends wrap the payload in a tap-to-
-        # reveal MarkdownV2 spoiler — but ONLY ports that can actually
-        # render MarkdownV2 roll for it, so test fakes keep their exact
-        # single-consumption rng contract. Escaping inflates the payload
-        # (code-review fix: chunk with tg_format.split_escaped so every
-        # spoiler chunk stays under the 4096 sendMessage cap, in order).
+        # reveal spoiler — but ONLY ports that can render HTML roll for it,
+        # so test fakes keep their exact single-consumption rng contract.
+        # Chunks are measured post-escaping (4096-after-parsing cap).
         send_ok = False
-        markdown_sender = getattr(telegram, "send_markdown_v2", None)
-        if markdown_sender is not None and not dry_run and \
+        html_sender = getattr(telegram, "send_html", None)
+        if html_sender is not None and not dry_run and \
                 rng.random() < tg_format.SPOILER_CHANCE:
             sent_parts = 0
             chunks: List[str] = []
             try:
-                chunks = tg_format.split_escaped(message, TEXT_LIMIT)
+                chunks = tg_format.split_for_html(message, TEXT_LIMIT)
                 for chunk in chunks:
-                    if bool(markdown_sender(tg_format.spoiler(chunk))):
+                    if bool(html_sender(tg_format.spoiler_html(
+                            tg_format.plain_to_html(chunk)))):
                         sent_parts += 1
                     else:
                         break

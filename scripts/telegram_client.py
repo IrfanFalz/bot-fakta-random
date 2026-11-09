@@ -45,9 +45,9 @@ class TelegramClient:
             payload["parse_mode"] = parse_mode
         return self._call("sendMessage", payload)
 
-    def send_markdown_v2(self, text: str) -> bool:
-        """MarkdownV2 send (spoiler-capable); caller pre-escapes."""
-        return self.send_message(text, parse_mode="MarkdownV2")
+    def send_html(self, text: str) -> bool:
+        """HTML send (bold paragraphs + <tg-spoiler>); caller pre-escapes."""
+        return self.send_message(text, parse_mode="HTML")
 
     def send_photo(self, photo_url: str, caption: Optional[str] = None) -> bool:
         payload: Dict[str, Any] = {"chat_id": self.chat_id, "photo": photo_url}

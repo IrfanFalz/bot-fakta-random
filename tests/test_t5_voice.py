@@ -48,7 +48,7 @@ class FakeRng:
 
 
 class FakeTelegram:
-    """Plain-text-only port (no send_markdown_v2): fakes from T1..T4."""
+    """Plain-text-only port (no send_html): fakes from T1..T4."""
     def is_configured(self):
         return True
 
@@ -63,15 +63,15 @@ class FakeTelegram:
         return []
 
 
-class MarkdownTelegram(FakeTelegram):
-    """Port that CAN render MarkdownV2 (spoiler-capable)."""
+class HtmlTelegram(FakeTelegram):
+    """Port that CAN render parse_mode=HTML (spoiler + bold capable)."""
 
     def __init__(self):
         super().__init__()
-        self.sent_markdown: List[str] = []
+        self.sent_html: List[str] = []
 
-    def send_markdown_v2(self, text: str) -> bool:
-        self.sent_markdown.append(text)
+    def send_html(self, text: str) -> bool:
+        self.sent_html.append(text)
         return True
 
 
@@ -173,8 +173,8 @@ def test_opener_rotation_varies_between_sends(tmp_path):
     assert telegram2.sent[0].startswith("Tau gak...")
 
 
-def test_spoiler_injection_on_markdown_capable_ports(tmp_path):
-    telegram = MarkdownTelegram()
+def test_spoiler_injection_on_html_capable_ports(tmp_path):
+    telegram = HtmlTelegram()
     source = type("S", (), {})()
     source.fetch = lambda: _content(body="Fakta agar telinga olok-olok. 1+1=2!")
 
@@ -182,32 +182,34 @@ def test_spoiler_injection_on_markdown_capable_ports(tmp_path):
     result = _run(tmp_path, [(source, 100.0)], telegram=telegram,
                   rng=FakeRng(rolls=[0.01]))
     assert result.sent is True
-    assert telegram.sent_markdown, "spoiler send must use the markdown port"
-    wrapped = telegram.sent_markdown[0]
-    assert wrapped.startswith("||")
-    assert wrapped.endswith("||")
-    assert "1\+1" in wrapped or "1\\+1" in wrapped, "special chars escaped"
+    assert telegram.sent_html, "spoiler send must use the HTML port"
+    wrapped = telegram.sent_html[0]
+    assert wrapped.startswith("<tg-spoiler>")
+    assert wrapped.endswith("</tg-spoiler>")
+    assert "1+1=2" in wrapped, "plain chars stay untouched by HTML escaping"
     assert not telegram.sent, "plain port must NOT receive the spoiler copy"
 
     # roll >= 0.10 → NO spoiler: prob, pick, spoiler = [0.0, 0.0, 0.50]
-    telegram2 = MarkdownTelegram()
+    telegram2 = HtmlTelegram()
     _run(tmp_path / "two", [(source, 100.0)], telegram=telegram2,
          rng=FakeRng(rolls=[0.0, 0.0, 0.50]))
-    assert not telegram2.sent_markdown
-    assert telegram2.sent, "non-spoiler goes through the plain port"
+    assert not telegram2.sent, "non-spoiler never degrades to the plain port"
+    assert telegram2.sent_html, "message still renders through the HTML port"
+    assert all(not chunk.startswith("<tg-spoiler>")
+               for chunk in telegram2.sent_html)
 
 
 def test_spoiler_failure_falls_back_to_plain(tmp_path):
-    class BrokenMarkdown(FakeTelegram):
+    class BrokenHtml(FakeTelegram):
         def __init__(self):
             super().__init__()
             self.attempts = 0
 
-        def send_markdown_v2(self, text: str) -> bool:
+        def send_html(self, text: str) -> bool:
             self.attempts += 1
-            raise RuntimeError("telegram 400: bad markdown")
+            raise RuntimeError("telegram 400: bad html")
 
-    telegram = BrokenMarkdown()
+    telegram = BrokenHtml()
     source = type("S", (), {})()
     source.fetch = lambda: _content()
 
@@ -215,9 +217,11 @@ def test_spoiler_failure_falls_back_to_plain(tmp_path):
                   rng=FakeRng(rolls=[0.01]))
 
     assert result.sent is True
-    assert telegram.attempts == 1
+    # HTML is tried twice on the way down (spoiler roll, then delivery)
+    # before the plain fallback catches the message.
+    assert telegram.attempts == 2
     assert telegram.sent == [result.message], "plain text fallback"
-    assert "1\+" not in telegram.sent[0]
+    assert "tg-spoiler" not in telegram.sent[0]
 
 
 def test_ai_generated_source_slot_parses_and_maps(tmp_path):
@@ -255,8 +259,11 @@ def test_unparsable_ai_output_is_typed(tmp_path):
 
 
 def test_escape_semantics_match_the_notes():
-    escaped = tg_format.escape_markdown_v2("Fakta: 1+1=2. Ok!")
-    for ch in ("\\.", "\\!", "\\+"):
-        assert ch in escaped
-    raw = tg_format.spoiler("Pesan.")
-    assert raw.startswith("||") and raw.endswith("||")
+    escaped = tg_format.escape_html("i<3 fakta & konspirasi >i<")
+    for fragment in ("&amp;", "&lt;", "&gt;"):
+        assert fragment in escaped
+    html = tg_format.plain_to_html("fakta: **RAM** itu 1<2 & 4>3")
+    assert "<b>RAM</b>" in html
+    assert "1&lt;2 &amp; 4&gt;3" in html
+    raw = tg_format.spoiler_html(tg_format.plain_to_html("Pesan."))
+    assert raw.startswith("<tg-spoiler>") and raw.endswith("</tg-spoiler>")

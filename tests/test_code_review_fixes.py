@@ -147,33 +147,33 @@ def test_malformed_candidate_is_thrown_back_but_silence_still_wins(tmp_path):
 
 
 # ------------------------------------ (b) spoiler / remainder splitting
-def test_split_escaped_chunks_respect_escaped_length():
+def test_split_for_html_chunks_respect_rendered_length():
     story = " ".join(f"katap Winterfell&{i}!" for i in range(80))
-    for chunk in tg_format.split_escaped(story, 200):
-        assert len(tg_format.escape_markdown_v2(chunk)) <= 200
-        assert "\\" not in chunk[-1]
+    for chunk in tg_format.split_for_html(story, 200):
+        assert len(tg_format.plain_to_html(chunk)) <= 200
+        assert chunk[-1] not in "&", "cut never splits inside an entity"
     # order + completeness (every space-boundary word survives)
-    rejoined = " ".join(tg_format.split_escaped(story, 200))
+    rejoined = " ".join(tg_format.split_for_html(story, 200))
     assert rejoined == story
 
 
 def test_gamma_spoiler_send_short_message_single_chunk(tmp_path):
-    class MarkdownTG(FakeTelegram):
+    class HtmlTG(FakeTelegram):
         def __init__(self):
             super().__init__()
-            self.markdown: List[str] = []
+            self.html: List[str] = []
 
-        def send_markdown_v2(self, text: str) -> bool:
-            self.markdown.append(text)
+        def send_html(self, text: str) -> bool:
+            self.html.append(text)
             return True
 
-    telegram = MarkdownTG()
+    telegram = HtmlTG()
     result = _run(tmp_path, [(StaticSource(), 100.0)], telegram,
                   rolls=[0.0, 0.0, 0.01])  # prob, pick, spoiler=yes
 
     assert result.sent is True
-    assert len(telegram.markdown) == 1
-    assert telegram.markdown[0].startswith("||")
+    assert len(telegram.html) == 1
+    assert telegram.html[0].startswith("<tg-spoiler>")
 
 
 def test_photo_remainder_chunked_when_gigantic(tmp_path):
@@ -198,16 +198,25 @@ def test_photo_remainder_chunked_when_gigantic(tmp_path):
     assert rejoined.split() == result.message.split()
 
 
-# ------------------------------------------------- (d) empty PRD shapes
-def test_data_files_ship_empty_prd_shapes():
+# ------------------------------------------------- (d) valid PRD shapes
+def test_data_files_ship_valid_prd_shapes():
+    # The bot is live: state/history GROW after every send. What must hold
+    # forever is the PRD schema — wrong keys/types = placeholder or corrupt
+    # data reaching git.
     repo_state = json.loads(
         Path("data/state.json").read_text(encoding="utf-8"))
     repo_history = json.loads(
         Path("data/history.json").read_text(encoding="utf-8"))
-    assert repo_state == {"last_sent_timestamp": None,
-                          "last_update_id": None}, \
-        "placeholder contamination must not reach git again"
-    assert repo_history == []
+    assert set(repo_state) == {"last_sent_timestamp", "last_update_id"}
+    assert repo_state["last_sent_timestamp"] is None or \
+        isinstance(repo_state["last_sent_timestamp"], str)
+    assert repo_state["last_update_id"] is None or \
+        isinstance(repo_state["last_update_id"], int)
+    assert isinstance(repo_history, list)
+    for entry in repo_history:
+        assert set(entry) >= {"title", "keywords", "source", "timestamp"}
+        assert isinstance(entry["keywords"], list) \
+            and all(isinstance(word, str) for word in entry["keywords"])
 
 
 # ---------------------------------------- (e) shared keywords module
