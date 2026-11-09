@@ -13,11 +13,11 @@ Uniform contract: `{title, body, keywords, source_name, image_query}`.
 from __future__ import annotations
 
 import random as _random
-import string
 from typing import Any, Dict
 
 import requests
 
+import keywords
 from wikipedia_source import SourceError  # same typed contract
 
 SUBREDDITS = (
@@ -27,26 +27,6 @@ SUBREDDITS = (
 )
 
 _TIMEOUT = 8  # polite, short
-
-
-def _keywords_from(title: str, limit: int = 5) -> list:
-    return _keywords_of(title, limit)
-
-
-_STOPWORDS = frozenset({
-    "the", "a", "an", "and", "or", "of", "to", "in", "is", "are", "was",
-    "how", "why", "what", "do", "does", "did", "kenapa", "apakah", "itu",
-    "yang", "kan", "ke", "di", "dari", "untuk", "ada", "bisa",
-})
-
-
-def _keywords_of(text: str, limit: int) -> list:
-    words = [
-        word.strip(string.punctuation).casefold()
-        for word in (text or "").split()
-    ]
-    kept = [w for w in words if len(w) >= 3 and w not in _STOPWORDS]
-    return kept[:limit]
 
 
 def _top_post(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -108,10 +88,11 @@ class RedditSource:
         except KeyError as exc:
             raise SourceError(f"reddit payload shape unexpected: {exc}") from exc
         title = str(post.get("title") or "").strip()
+        post_keywords = keywords.keywords_of(title)
         return {
             "title": title,
             "body": _compose_body(post),
-            "keywords": _keywords_from(title),
+            "keywords": post_keywords,
             "source_name": "reddit",
-            "image_query": " ".join(_keywords_from(title, 3)) or title,
+            "image_query": keywords.image_query(title, 3) or title,
         }

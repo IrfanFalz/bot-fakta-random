@@ -12,9 +12,11 @@ Procedure (setelah provisioning selesai):
    tidak diperlukan; cukup biarkan cron jalan.
 2. Setelah 24 jam: bandingkan `data/history.json` timestamps antar commit.
    Expectasi: timestamps BUKAN kelipatan pola tetap satu jam (beda jeda).
-3. Confidence tambahan: `PROBABILITY` default 0.06 × 96 run/day ≈ 1.2 kirim
-   per 24 jam; kalau mau trial yang lebih pasti naikkan `PROBABILITY` ke
-   `0.15` via repo variables untuk trial, kembalikan setelahnya.
+3. Confidence tambahan: `PROBABILITY` default 0.02 × 96 run/day ≈ 1.9 hari
+   → ~1-2 kirim per 24 jam (aritmetika diperbaiki di code-review: nilai
+   lama 0.06 memberi ~5.8/hari, meleset dari target tiket). Kalau mau
+   trial yang lebih pasti naikkan `PROBABILITY` ke `0.15` via repo
+   variables untuk trial, kembalikan setelahnya.
 
 ## 2. 10 pesan berturut-turut tak ada near-duplicate ✅ (test) / ⬜ (live)
 
@@ -29,8 +31,12 @@ Procedure (setelah provisioning selesai):
 
 - Worker path: realtime (detik), cooldown di-bypass, offset selalu maju
   (test: `tests/test_lagi_on_demand.py`).
-- Fallback path (worker mati): scheduled run memanen `/lagi` dalam ≤15 menit
-  (test menyediakan jalur; PRD menerima <5 menit via worker ✓).
+- Fallback path (worker mati): scheduled run memanen `/lagi` dalam ≤15 menit.
+  **PENTING (catatan code-review):** selama webhook Bot API masih aktif
+  (Worker sudah `setWebhook`), `getUpdates` dari Actions akan selalu 409 —
+  fallback hanya bisa jalan kalau webhook dihapus (`deleteWebhook`) atau
+  worker memang belum pernah `setWebhook`. Dua jalur tidak bisa jalan
+  bersamaan; ini by-design dari Telegram, bukan bug bot.
 
 ## 4. Groq/Unsplash gagal atau tak di-set → bot tetap jalan ✅
 

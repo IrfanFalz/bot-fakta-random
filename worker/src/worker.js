@@ -33,11 +33,16 @@ export default {
     }
 
     // Verify the update really came from Telegram BEFORE parsing the body.
-    // If WEBHOOK_SECRET is unset (provisioning not done yet) we degrade
-    // gracefully instead of blind-rejecting; setWebhook should have set it.
+    // Fail CLOSED: without WEBHOOK_SECRET we cannot tell a real Telegram
+    // webhook from an internet scan (code-review fix — previously an unset
+    // secret degraded into accepting every POST). Provisioning must set the
+    // same secret via setWebhook; until then the endpoint answers 403.
     const expected = env.WEBHOOK_SECRET || "";
+    if (!expected) {
+      return new Response("webhook secret not configured", { status: 403 });
+    }
     const received = request.headers.get(SECRET_HEADER) || "";
-    if (expected && received !== expected) {
+    if (received !== expected) {
       return new Response("forbidden", { status: 403 });
     }
 

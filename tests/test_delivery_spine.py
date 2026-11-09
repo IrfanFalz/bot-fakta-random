@@ -132,7 +132,7 @@ def test_cooldown_active_skips_heavy_work_and_sends_nothing(tmp_path):
 
 
 def test_probability_roll_loss_skips_fetch_and_send(tmp_path):
-    # Definite loss: random() returns 0.5 against the default 0.06.
+    # Definite loss: random() returns 0.5 against the default 0.02.
     result, harness, telegram, source = build_pipeline(
         tmp_path, rng=FakeRng(roll=0.5))
 

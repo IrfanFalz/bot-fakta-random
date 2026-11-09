@@ -10,38 +10,18 @@ Uniform contract: `{title, body, keywords, source_name, image_query}`.
 """
 from __future__ import annotations
 
-import datetime as _dt
 import random as _random
-import string
 from typing import Any, Dict
 
 import requests
 
+import keywords
 from wikipedia_source import SourceError  # same typed contract
 
-_API_TEMPLATES = (
-    "https://numbersapi.com/{number}/trivia?json",
-    "http://numbersapi.com/random/year?json",
-    "https://numbersapi.com/{month}/{day}/date?json",
-)
+_TRIVIA_URL = "https://numbersapi.com/{number}/trivia?json"
 
 # keeps the runner off IP ban territory if the service comes back:
 _TIMEOUT = 3  # research note: short (2-3s), do not block the run on it
-
-
-def _keywords_of(text: str, limit: int) -> list:
-    words = [
-        word.strip(string.punctuation).casefold()
-        for word in (text or "").split()
-    ]
-    return [w for w in words if len(w) >= 3][:limit]
-
-
-def _random_month_day() -> "_dt.date":
-    import datetime as datetime_module
-    import random
-    return datetime_module.date(
-        2026, random.randint(1, 12), random.randint(1, 28))
 
 
 class NumbersSource:
@@ -49,7 +29,7 @@ class NumbersSource:
 
     def fetch(self) -> Dict[str, Any]:
         number = _random.randint(11, 999)
-        url = _API_TEMPLATES[0].format(number=number)  # trivia facts
+        url = _TRIVIA_URL.format(number=number)
         try:
             response = requests.get(url, timeout=_TIMEOUT)
             if response.status_code != 200:
@@ -66,11 +46,11 @@ class NumbersSource:
 
         title = f"Fakta angka {number}"
         body = f"Angka {number}: {text}"
-        keywords = _keywords_of(f"angka {number} " + text, 5)
+        fact_keywords = keywords.keywords_of(f"angka {number} " + text)
         return {
             "title": title,
             "body": body,
-            "keywords": keywords,
+            "keywords": fact_keywords,
             "source_name": "numbers",
             "image_query": "numbers",
         }

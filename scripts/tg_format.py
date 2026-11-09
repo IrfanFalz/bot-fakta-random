@@ -30,6 +30,36 @@ def spoiler(text: str) -> str:
     return f"||{escape_markdown_v2(text)}||"
 
 
-def render(text: str, spoilered: bool) -> str:
-    """Return the render-ready string for `parse_mode=MarkdownV2`."""
-    return spoiler(text) if spoilered else escape_markdown_v2(text)
+def split_escaped(text: str, limit: int) -> "list[str]":
+    """Word-boundary chunks whose ESCAPED length stays under `limit`.
+
+    MarkdownV2 escaping can nearly double a string (`1+1=2` -> `1\\+1\\=2`),
+    so chunks are measured AFTER escaping (code-review fix: a polished
+    ~400-word story once escaped can blow past the 4096 sendMessage cap).
+    Splits always land on spaces (an escape sequence never contains one), so
+    a chunk can never begin or end mid-escape. A single monster word still
+    over the limit is hard-cut on its escaping-aware size.
+    """
+    text = text or ""
+    if len(escape_markdown_v2(text)) <= limit:
+        return [text]
+    chunks: "list[str]" = []
+    current = ""
+    for word in text.split(" "):
+        candidate = word if not current else f"{current} {word}"
+        if len(escape_markdown_v2(candidate)) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        # monster word: shrink on escaped size, hard-cut pieces apart
+        while len(escape_markdown_v2(word)) > limit:
+            cut = len(word)
+            while cut > 1 and len(escape_markdown_v2(word[:cut])) > limit:
+                cut -= 1
+            chunks.append(word[:cut])
+            word = word[cut:]
+        current = word
+    if current:
+        chunks.append(current)
+    return [chunk for chunk in chunks if chunk]

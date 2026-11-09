@@ -20,10 +20,11 @@ Production code stays stdlib + `requests` (frugality rule from AGENTS.md).
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List
 
 import requests
+
+import keywords
 
 _RANDOM_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/random/summary"
 _REQUEST_TIMEOUT_SECONDS = 8
@@ -36,41 +37,23 @@ _USER_AGENT = (
 
 
 class SourceError(RuntimeError):
-    """Any failure of a content source; the orchestrator skips the run."""
+    """Any failure of a content source; the orchestrator skips the run.
 
-
-# Very small stopword list for deriving title keywords / image queries.
-# English + a few Indonesian words — titles come from en.wikipedia.org.
-_STOPWORDS = frozenset({
-    "a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "for",
-    "by", "with", "from", "as", "is", "are", "was", "were", "be", "it",
-    "its", "his", "her", "that", "this", "why", "how", "what", "who",
-    "apa", "itu", "yang", "kenapa", "dan", "dari", "di", "ke", "untuk",
-})
+    Canonical home (code-review note): declared here because this was the
+    first source module; every other source module imports THIS type. When
+    a fifth/third-party source arrives and the coupling hurts, extraction
+    to a small `source_contract.py` is the queued move — until then the
+    single import keeps the contract unambiguous.
+    """
 
 
 def extract_keywords(text: str, limit: int = 5) -> List[str]:
-    """Top few non-stopword words of `text`, lowercased, in order."""
-    words = re.findall(r"[a-zA-Z0-9']+", text or "")
-    keywords: List[str] = []
-    for word in words:
-        clean = word.lower().strip("'")
-        if not clean or clean in _STOPWORDS:
-            continue
-        if clean not in keywords:
-            keywords.append(clean)
-        if len(keywords) >= limit:
-            break
-    return keywords
+    """Back-compat aliases; the implementations live in `keywords.py`."""
+    return keywords.keywords_of(text, limit)
 
 
 def make_image_query(text: str) -> str:
-    """Title minus stopwords — a sane subject query for the later image ticket."""
-    words = [
-        word for word in re.findall(r"[a-zA-Z0-9']+", text or "")
-        if word.lower().strip("'") not in _STOPWORDS
-    ]
-    return " ".join(words)
+    return keywords.image_query(text)
 
 
 class WikipediaSource:

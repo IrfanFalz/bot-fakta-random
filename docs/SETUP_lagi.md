@@ -116,6 +116,22 @@ Invoke-RestMethod -Method Post `
 
 jawabannya: `{"ok":true,...}`.
 
+### ⚠️ Catatan webhook vs fallback poll (penting, dari code-review)
+
+Setelah `setWebhook` aktif, jalur **fallback poll di Actions tidak berfungsi** —
+`getUpdates` dibatasi Telegram kalau webhook terset (error 409). Itu normal:
+
+- Webhook aktif → `/lagi` realtime via Worker (jalur utama).
+- Kalau worker bermasalah dan kamu mau balik ke fallback poll 15-menit,
+  hapus webhook dulu: `Invoke-RestMethod -Method Post
+  "https://api.telegram.org/bot$token/deleteWebhook"` — lalu beri silang
+  catatan bahwa `/lagi` sementara via fallback.
+- Balik lagi nanti: jalankan `setWebhook` dari langkah 6 sekali lagi.
+
+Selama webhook terset dan worker down, `/lagi` tidak dibales scheduler
+(update tidak bisa dibaca dari Actions). Rencana cadangan terbaik:
+deploy ulang worker.
+
 ## 7. Tes end-to-end
 
 1. (Opsional cek worker nyala) Buka URL worker di browser → harus muncul
