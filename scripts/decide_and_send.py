@@ -586,17 +586,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     image_finder = ImageFinder()  # disabled internally without a key
 
     desired_mix = [
-        (WikipediaSource(), 35.0),
+        (WikipediaSource(), 25.0),
         (RedditSource(
             user_agent=os.environ.get(
                 "REDDIT_USER_AGENT",
                 "bot-fakta-random/1.0 (personal Telegram bot, "
                 "github.com/IrfanFalz/bot-fakta-random)")), 25.0),
-        (TriviaSource(), 20.0),
-        (NumbersSource(), 10.0),
+        (TriviaSource(), 15.0),
+        (NumbersSource(), 5.0),
         # AI-generated weird-question slot (ticket T5): present only with a
         # Groq key; its weight is redistributed when absent (source_pool).
-        (ai_generated_source.AIGeneratedSource(groq), 10.0) if groq else (None, 10.0),
+        # 2026-11-10 rebalance per user: the "kenapa X?" wow-factor slot is
+        # the favorite taste -> 10% became 30%; the Wikipedia random-article
+        # share (which can land on obscure stubs) eased off to compensate.
+        (ai_generated_source.AIGeneratedSource(groq), 30.0) if groq else (None, 30.0),
     ]
     candidate_sources = build_pool(desired_mix)
     if args.dry_run:
