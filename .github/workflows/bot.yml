@@ -12,7 +12,13 @@ name: bot
 #   (Telegram webhook -> Cloudflare Worker -> dispatch).
 on:
   schedule:
+    # Dua keluarga menit saling bolong (±7-8 menit antar event antri).
+    # GitHub documentedly DROPS queued schedule jobs under high load
+    # (observed: 96 intended ticks -> 2 ran). Two offset families double
+    # the odds that enough events survive a degraded day; the in-code
+    # cooldown (90 min) keeps the extra ticks from spamming.
     - cron: "7,22,37,52 * * * *"
+    - cron: "3,18,33,48 * * * *"
   repository_dispatch:
     types: [send-fact]
 
