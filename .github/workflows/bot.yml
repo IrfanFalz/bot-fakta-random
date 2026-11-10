@@ -43,16 +43,22 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Dispatch runs force the send (on-demand command pipeline, T7).
-          FORCE_SEND: ${{ github.event_name == 'repository_dispatch' && 'true' || 'false' }}
+          # Only the explicit /lagi path forces a send. The external
+          # cron-job.org timer (trigger "cron-timer") is a RELIABLE tick
+          # generator, not a command — it MUST go through the normal
+          # gates (cooldown + probability roll), otherwise every 15-min
+          # tick would guarantee a message (observed: two sends ~7 min
+          # apart on day one of the timer).
+          FORCE_SEND: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger != 'cron-timer' && 'true' || 'false' }}
           # T7: the /lagi webhook worker dispatches {trigger: "lagi"}; such a
           # run takes the on-demand path (same pipeline, cooldown/probability
           # bypassed, no getUpdates — with a webhook set polling would error).
           TRIGGER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger || '' }}
-          # Send-probability per tick: 0.10 (was 0.02) — raised after the
-          # cron-drop incident so a normal day still lands ~2-3 facts.
-          # COOLDOWN_MINUTES (90, default in code) keeps it from spamming.
-          PROBABILITY: "0.10"
+          # Send-probability per tick. Delivery is now driven by the reliable
+          # cron-job.org timer (~96 ticks/day, no longer forced), so the
+          # normal gates apply: 0.02 ≈ ~2 sends/day nominal; the 90-min
+          # cooldown bounds the ceiling even on a lucky streak.
+          PROBABILITY: "0.02"
           # Optional enrichments (T5/T6): missing secrets expand to empty →
           # the corresponding features silently turn off (never a red run).
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
