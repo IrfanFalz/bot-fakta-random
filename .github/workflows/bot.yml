@@ -1,12 +1,15 @@
 name: bot
 
 # T1 delivery spine: single combined workflow.
-# - schedule: every 15 minutes, normal probability/cooldown decision rules.
+# - schedule: every ~15 min at OFF-PEAK minutes (7,22,37,52) — the crowd
+#   default `*/15` (aligning :00/:15/:30/:45) sits on GitHub's high-load
+#   slots where scheduled runs get dropped/delayed (observed live:
+#   ~96 intended ticks -> only 2 actually ran in one day).
 # - repository_dispatch (send-fact): forced send, wired now for ticket T7
 #   (Telegram webhook -> Cloudflare Worker -> dispatch).
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
   repository_dispatch:
     types: [send-fact]
 
@@ -37,6 +40,10 @@ jobs:
           # run takes the on-demand path (same pipeline, cooldown/probability
           # bypassed, no getUpdates — with a webhook set polling would error).
           TRIGGER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger || '' }}
+          # Send-probability per tick: 0.10 (was 0.02) — raised after the
+          # cron-drop incident so a normal day still lands ~2-3 facts.
+          # COOLDOWN_MINUTES (90, default in code) keeps it from spamming.
+          PROBABILITY: "0.10"
           # Optional enrichments (T5/T6): missing secrets expand to empty →
           # the corresponding features silently turn off (never a red run).
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
