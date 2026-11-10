@@ -5,6 +5,9 @@ name: bot
 #   default `*/15` (aligning :00/:15/:30/:45) sits on GitHub's high-load
 #   slots where scheduled runs get dropped/delayed (observed live:
 #   ~96 intended ticks -> only 2 actually ran in one day).
+# - schedule re-registered 2026-11-10: a workflow-file touch flushes the
+#   scheduler so the NEW cron minute list is picked up (4 ticks went
+#   missing immediately after the first cron swap).
 # - repository_dispatch (send-fact): forced send, wired now for ticket T7
 #   (Telegram webhook -> Cloudflare Worker -> dispatch).
 on:
