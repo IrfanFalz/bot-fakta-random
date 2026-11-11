@@ -71,6 +71,9 @@ from wikipedia_source import SourceError  # noqa: E402
 
 DEFAULT_PROBABILITY = 0.02  # ~1-2 sends/day over 96 scheduled checks (code-review recalibration)
 DEFAULT_COOLDOWN_MINUTES = 90
+# Daily-presence guarantee: past this many hours without a send, the
+# probability roll is bypassed (rescues unlucky-streak dry days).
+DEFAULT_STALE_HOURS = 20.0
 # Ticket T3: don't resend a topic that resembles every recent one. The
 # threshold can be tuned with the DEDUPE_THRESHOLD env var.
 DEFAULT_DEDUPE_THRESHOLD = dedupe.DEFAULT_THRESHOLD
@@ -171,6 +174,19 @@ def _cooldown_active(last_sent_iso: Optional[str], now, cooldown_minutes: int) -
     if last is None:
         return False
     return bool((now - last).total_seconds() < cooldown_minutes * 60)
+
+
+def _stale_since_last_send(last_sent_iso: Optional[str], now,
+                           stale_hours: float) -> bool:
+    """True when the last send is older than `stale_hours`.
+
+    `None` (never sent) is NOT stale — a brand-new bot has no silence to
+    rescue; the guarantee only guards continuity after an actual send.
+    """
+    last = iso_to_datetime(last_sent_iso)
+    if last is None:
+        return False
+    return bool((now - last).total_seconds() >= stale_hours * 3600)
 
 
 def format_message(content: Dict[str, Any], rng: Any) -> str:
@@ -289,6 +305,7 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         clock: Any = None, rng: Any = None, state: Any = None, *,
         probability: float = DEFAULT_PROBABILITY,
         cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES, force: bool = False,
+        stale_hours: float = DEFAULT_STALE_HOURS,
         dry_run: bool = False, poll: bool = True,
         sources: Optional[List[tuple]] = None,
         trigger: Optional[str] = None,
@@ -500,6 +517,14 @@ def run(telegram: TelegramPort, source: Optional[SourcePort] = None,
         _persist_state_if_changed(state, current, current != loaded)
         return RunResult(False, "", "cooldown")
 
+    # 3.5) Daily-presence guarantee: when the last send is older than
+    # `stale_hours` (default 20), bypass the probability roll. A dry day
+    # is a design failure for a daily-companion bot — the dice give the
+    # unpredictable cadence, this gate only rescues long silences.
+    if not force and _stale_since_last_send(
+            current.get("last_sent_timestamp"), now, stale_hours):
+        force = True
+
     # 4) Probability roll, unless forced.
     if not force and rng.random() >= probability:
         _persist_state_if_changed(state, current, current != loaded)
@@ -556,6 +581,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "TRIGGER", "") == ON_DEMAND_TRIGGER else None
     probability = float(os.environ.get("PROBABILITY", DEFAULT_PROBABILITY))
     cooldown_minutes = int(os.environ.get("COOLDOWN_MINUTES", DEFAULT_COOLDOWN_MINUTES))
+    stale_hours = float(os.environ.get("STALE_HOURS", DEFAULT_STALE_HOURS))
     dedupe_threshold = float(os.environ.get(
         "DEDUPE_THRESHOLD", DEFAULT_DEDUPE_THRESHOLD))
 
@@ -615,6 +641,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         state=state_store.JsonStateStore(),
         probability=probability,
         cooldown_minutes=cooldown_minutes,
+        stale_hours=stale_hours,
         force=force,
         dry_run=args.dry_run,
         trigger=trigger,

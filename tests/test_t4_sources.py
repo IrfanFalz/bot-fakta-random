@@ -242,3 +242,45 @@ def test_orchestrator_sends_with_a_mixed_pool_skipping_failures(tmp_path, monkey
     # deterministic ordering check: a dead pick that failed consumed its
     # attempt; a successor attempt on the healthy source sends fine — both
     # green outcomes are acceptable arrangement details of the roll.
+
+# ---------------------------------------- daily-presence guarantee (stale)
+class _StaticSource:
+    def fetch(self):
+        return _uniform({"title": "Fakta stale", "body": "Jaminan harian.",
+                         "keywords": ["stale"], "source_name": "stale-test"})
+
+
+def test_stale_guarantee_forces_send_after_twenty_hours(tmp_path):
+    """Last send 21h ago + a LOSING roll -> the guarantee must still send."""
+    store = _store(tmp_path)
+    store.save_state({"last_sent_timestamp": "2026-10-31T12:12:00Z",  # 21h before FakeClock
+                      "last_update_id": None})
+    telegram = FakeTelegram()
+    result = decide_and_send.run(
+        telegram=telegram, clock=FakeClock(), rng=FakeRng(rolls=[0.9999]),
+        state=store, sources=[(_StaticSource(), 100.0)])
+    assert result.sent is True
+    assert telegram.sent, "20h+ silence must be rescued even on a losing roll"
+
+
+def test_no_guarantee_inside_twenty_hours(tmp_path):
+    """Last send 19h ago + losing roll -> normal skip (dice still own the day)."""
+    store = _store(tmp_path)
+    store.save_state({"last_sent_timestamp": "2026-10-31T14:12:00Z",  # 19h before FakeClock
+                      "last_update_id": None})
+    telegram = FakeTelegram()
+    result = decide_and_send.run(
+        telegram=telegram, clock=FakeClock(), rng=FakeRng(rolls=[0.9999]),
+        state=store, sources=[(_StaticSource(), 100.0)])
+    assert result.reason == "probability-roll"
+    assert telegram.sent == [], "fresh-enough state must not bypass the dice"
+
+
+def test_never_sent_state_is_not_stale(tmp_path):
+    """Fresh bot (last_sent=None) keeps the old first-run dice behavior."""
+    telegram = FakeTelegram()
+    result = decide_and_send.run(
+        telegram=telegram, clock=FakeClock(), rng=FakeRng(rolls=[0.9999]),
+        state=_store(tmp_path), sources=[(_StaticSource(), 100.0)])
+    assert result.reason == "probability-roll"
+    assert telegram.sent == []
